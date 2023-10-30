@@ -198,4 +198,4 @@ if __name__ == '__main__':
 
     print(len(all_feature_list))
 
-    analysis('./Data/TrainSmall.tsv', all_feature_list, './Data/TrainSmall_FeatureInfo.NumBucket_{}.yaml'.format(num_bucket))
+    analysis('./Data/TrainSmall80.tsv', all_feature_list, './Data/TrainSmall80_FeatureInfo.NumBucket_{}.yaml'.format(num_bucket))

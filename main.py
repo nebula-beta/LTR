@@ -30,6 +30,7 @@ def training(args):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+    device = args.device
 
 
     feature_list = 'QDVectorSimilarity,TermShardTotalQueryLength,TermShardMatchedTermCount_AUTB,TermShardMatchedTermCount_Click,TermShardMatchedPostingCount_AUTB,TermShardMatchedPostingCount_Click,TermShardMaxTermCountOfPosting_AUTB,TermShardMaxTermCountOfPosting_Click,TermShardQueryTermCoverage_AUTB,TermShardQueryTermCoverage_Click,TermShardMaxIDFOfPosting_AUTB,TermShardMaxIDFOfPosting_Click,TermShardAvgIDFOfPosting_AUTB,TermShardAvgIDFOfPosting_Click,TermShardMinPostingRatio_AUTB,TermShardMinPostingRatio_Click,BinaryTF_Url_0,BinaryTF_Url_1,BinaryTF_Url_2,BinaryTF_Url_3,BinaryTF_Url_4,BinaryTF_Url_5,BinaryTF_Url_6,BinaryTF_Url_7,BinaryTF_Url_8,BinaryTF_Url_9,BinaryTF_Title_0,BinaryTF_Title_1,BinaryTF_Title_2,BinaryTF_Title_3,BinaryTF_Title_4,BinaryTF_Title_5,BinaryTF_Title_6,BinaryTF_Title_7,BinaryTF_Title_8,BinaryTF_Title_9,BinaryTF_Body_0,BinaryTF_Body_1,BinaryTF_Body_2,BinaryTF_Body_3,BinaryTF_Body_4,BinaryTF_Body_5,BinaryTF_Body_6,BinaryTF_Body_7,BinaryTF_Body_8,BinaryTF_Body_9,AnchorFlatStreamLength,AnchorTotalPhraseCount,BodyTermCount,DomainRank,StaticRank,StreamLength_Anchor,StreamLength_Body,StreamLength_Title,StreamLength_Url,TbDomainUsers,WordsInDomain,WordsInPath,WordsInTitle,LanguagePreference,LocationPreference,d,TermShardTotalQueryTermCoverage,TermShardTotalQueryTermCoverageWeighted,TermShardMatchedTermCountWeighted_AUTB,TermShardMatchedTermCountWeighted_Click'.split(',')
@@ -56,14 +57,15 @@ def training(args):
 
     list(map(int, args.hidden_nodes.split(',')))
     # Setup model, optimizer and loss
-    #model = NeuralNet(train_data.num_features, 4, [64,32,15])
-    #model = NeuralNet(train_data.num_features, 3, [15, 6])
-    #model = NeuralNet(train_data.num_features, args.layer, list(map(int, args.hidden_nodes.split(','))))
-    model = NeuralNet(train_data.num_features, args.layer, list(map(int, args.hidden_nodes.split(','))))
+    model = NeuralNet(train_data.num_features, args.layer, list(map(int, args.hidden_nodes.split(',')))).to(device)
     #model = FM_model2(train_data.num_features, 5)
     # model = FM_model(train_data.num_features, 5)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    # optimizer = torch.optim.SGD(model.parameters(), lr=args.lr)
+
+    optimizer = None
+    if args.optimizer == 'Adam':
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    elif args.optimizer == 'SGD':
+        optimizer = torch.optim.SGD(model.parameters(), lr=args.lr)
     #scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda e:(3000-e)**2/100, last_epoch=-1)
     # torch.optim.lr_scheduler.ReduceLROnPlateau
 
@@ -83,6 +85,8 @@ def training(args):
         model.train()
         for batch in train_loader:
             x, y, idx = batch
+            x = x.to(device)
+            y = y.to(device)
 
 
             pred = model(x)
@@ -113,14 +117,14 @@ def training(args):
             with torch.no_grad():
                 for batch in test_loader:
                     output_column, x = batch
+                    x = x.to(device)
 
                     x = x.reshape(-1, x.shape[-1])
-                    predict_data = model(x).detach().numpy().tolist()
+                    predict_data = model(x).cpu().detach().numpy().tolist()
 
 
                     output_column_list.extend(output_column)
                     predict_list.extend(predict_data)
-
 
             logger.info("Calc")
             recallset = pd.DataFrame(output_column_list, columns=output_column_names)
@@ -154,12 +158,14 @@ if __name__ == '__main__':
     parser.add_argument('--log_dir', dest = "log_dir", type = str, default = './Log', help = "log dir")
     parser.add_argument('--model_dir', dest = "model_dir", type = str, default = './Model', help = "log dir")
     parser.add_argument('--exp_name', dest = "exp_name", type = str, required = True, help = "experiment name")
+    parser.add_argument('--device', dest = "device", type = str, default = 'cpu', help = "device")
     parser.add_argument('--epochs', dest = "epochs", type = int, default = 150, help = "max epochs allowed (default = 150)")
+    parser.add_argument('--optimizer', dest = "optimizer", type = str, default = 'Adam', help = "optimizer=Adam/SGD")
     parser.add_argument('--lr', dest = "lr", type = float, default = 1e-3, help = "initial learning rate (default = 1e-3)")
     parser.add_argument('--batch_size', dest = "batch_size", type = int, default = 32, help = "Training batch size. (default = 32)")
     parser.add_argument('--alpha', dest = "alpha", type = float, default = 1.0, help = "alpha")
-    parser.add_argument('--layer', dest = "layer", type = int, default = 2, help = "Neural network layer. (default = 3)")
-    parser.add_argument('--hidden_nodes', dest = "hidden_nodes", type = str, default = "15", help = "Neural network hidden nodes, sep by ,(default=15,6)")
+    parser.add_argument('--layer', dest = "layer", type = int, default = 2, help = "Neural network layer. (default = 2)")
+    parser.add_argument('--hidden_nodes', dest = "hidden_nodes", type = str, default = "15", help = "Neural network hidden nodes, sep by ,(default=15)")
     parser.add_argument('--finetune', dest = "finetune", type = str, default = None, help = "is finetune or not")
     parser.add_argument('--ckpt', dest = "ckpt", type = str, default =None, help = "ckpt path")
 
