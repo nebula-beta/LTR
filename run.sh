@@ -32,8 +32,10 @@
 #                --batch_size 1 \
 #                --alpha 1.0 \
 #                --exp_name lr_1e3_bs1_uniform_001
-python main.py --train_data ./Data/TrainSmall.tsv \
+# python main.py --train_data ./Data/TrainSmall.tsv \
+python main.py --train_data ./Data/TrainSmall80.tsv \
                --test_data ./Data/EvalDataWithRating.tsv \
+               --feature_info_path ./Data/TrainSmall_FeatureInfo.NumBucket_100.yaml \
                --log_dir ./Log\
                --epochs 150 \
                --lr 1e-4 \

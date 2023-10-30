@@ -1,5 +1,7 @@
 import os
 from typing import Tuple, Optional
+import yaml
+import math
 
 import numpy as np
 import pandas as pd
@@ -7,6 +9,7 @@ import torch
 from torch.utils.data import Dataset
 
 from Utils import init_logger, get_logger, rating_to_label_gains, rating_to_label
+from DatasetAnalysis import FeatureInfo, FeatureInfo_repr, FeatureInfo_cons
 
 logger = get_logger()
 
@@ -41,9 +44,6 @@ class LibSVMDataset(Dataset):
 
         self.num_features = len(feature_list)
 
-        #self.mean = np.mean(X, axis=0) 
-        #self.std = np.std(X, axis=0, ddof=1)
-        #self.X = X / self.std - self.mean / self.std
         self.X = X
 
         unique_query_ids, indices, counts = np.unique(query_ids, return_index=True, return_counts=True)
@@ -84,7 +84,8 @@ class LibSVMDataset(Dataset):
 
 
     @classmethod
-    def from_tsv_file(cls, tsv_file_path, query_id_name, rating_name, feature_list, filter_queries=True, transform=False, mean=None, std=None, sep='\t'):
+    def from_tsv_file(cls, tsv_file_path, query_id_name, rating_name, feature_list, filter_queries=True, \
+                     feature_process_type='normal', feature_info_dict=None, sep='\t'):
         """
         :param tsv_file_path: dataset file path
         :param query_id_name: header name of query_id
@@ -100,21 +101,58 @@ class LibSVMDataset(Dataset):
             df[rating_name] = 0
         #y = df[rating_name].apply(rating_to_label_gains)
         y = df[rating_name].apply(rating_to_label)
-        X = df[feature_list]
 
-        if not transform:
-            mean = df[feature_list].mean()
-            std = df[feature_list].std()
+        X = None
+        mean = None
+        std = None
+
+        if feature_process_type == 'normal':
+            X = df[feature_list]
+            mean = X.mean()
+            std = X.std()
+
+            for feature in feature_list:
+                X[feature] = X[feature] / std[feature] - mean[feature] / std[feature]
+
+        elif feature_process_type == 'aether':
+            X = df[feature_list]
+            new_X = pd.DataFrame()
+            new_feature_list = []
+            for feature in feature_list:
+                feature_info = feature_info_dict[feature]
+
+                if feature_info.unique_count == 2:
+                    new_feature = feature + "_Bucket"
+                    new_feature_list.append(new_feature)
+                    new_X[new_feature] = X[feature].apply(lambda x : 0.0 if x > 0.0 else 1.0)
+                    logger.info("Feature: {} {}".format(feature, "Bucket Transform"))
+                    continue
+
+                if feature_info.zero_values / feature_info.total_values > 0.5:
+                    new_feature = feature + "_Bucket"
+                    new_feature_list.append(new_feature)
+                    new_X[new_feature] = X[feature].apply(lambda x : 0.0 if x > 0.0 else 1.0)
+                    logger.info("Feature: {} {}".format(feature, "Bucket Transform"))
 
 
-        for feature in feature_list:
-            X[feature] = X[feature] / std[feature] - mean[feature] / std[feature]
-
+                if feature_info.linear_entropy <= feature_info.log_entropy:
+                    new_feature = feature + "_LogLinear"
+                    new_feature_list.append(new_feature)
+                    new_X[new_feature] = feature_info.log_slope * X[feature].apply(lambda x : math.log(x + 1.0)) + feature_info.log_bias
+                    #new_features[new_feature] = feature_info.log_slope * X[feature] + feature_info.log_bias
+                    logger.info("Feature: {} {}".format(feature, "Log Linear Transform"))
+                else:
+                    new_feature = feature + "_Linear"
+                    new_feature_list.append(new_feature)
+                    new_X[feature] = feature_info.linear_slope * X[feature] + feature_info.linear_bias
+                    logger.info("Feature: {} {}".format(feature, "Linear Transform"))
+            X = new_X
+            feature_list = new_feature_list
 
         logger.info("Loaded dataset from {} and got X shape {}, y shape {} and query_ids shape {}".format(tsv_file_path, X.shape, y.shape, query_ids.shape))
 
         # TODO and warning: X need sorted by query_id
-        return cls(X.to_numpy(), y.to_numpy(), query_ids.to_numpy(), feature_list, filter_queries), mean, std
+        return cls(X.to_numpy(), y.to_numpy(), query_ids.to_numpy(), feature_list, filter_queries), mean, std, feature_info_dict
 
 
     #@property
@@ -193,7 +231,7 @@ class LibSVMInferenceDataset(Dataset):
 
 
     @classmethod
-    def from_tsv_file(cls, tsv_file_path, output_column_names, feature_list, mean, std, sep='\t'):
+    def from_tsv_file(cls, tsv_file_path, output_column_names, feature_list, feature_process_type='normal', mean=None, std=None, feature_info_dict=None, sep='\t'):
         """
         :param tsv_file_path: dataset file path
         :param query_id_name: header name of query_id
@@ -205,10 +243,52 @@ class LibSVMInferenceDataset(Dataset):
 
         df = pd.read_csv(tsv_file_path, sep=sep)
         output_columns = df[output_column_names]
-        X = df[feature_list]
 
-        for feature in feature_list:
-            X[feature] = X[feature] / std[feature] - mean[feature] / std[feature]
+        X = None
+
+        if feature_process_type == 'normal':
+            X = df[feature_list]
+            mean = X.mean()
+            std = X.std()
+
+            for feature in feature_list:
+                X[feature] = X[feature] / std[feature] - mean[feature] / std[feature]
+
+        elif feature_process_type == 'aether':
+            X = df[feature_list]
+            new_X = pd.DataFrame()
+            new_feature_list = []
+            for feature in feature_list:
+                feature_info = feature_info_dict[feature]
+
+                if feature_info.unique_count == 2:
+                    new_feature = feature + "_Bucket"
+                    new_feature_list.append(new_feature)
+                    new_X[new_feature] = X[feature].apply(lambda x : 0.0 if x > 0.0 else 1.0)
+                    logger.info("Feature: {} {}".format(feature, "Bucket Transform"))
+                    continue
+
+                if feature_info.zero_values / feature_info.total_values > 0.5:
+                    new_feature = feature + "_Bucket"
+                    new_feature_list.append(new_feature)
+                    new_X[new_feature] = X[feature].apply(lambda x : 0.0 if x > 0.0 else 1.0)
+                    logger.info("Feature: {} {}".format(feature, "Bucket Transform"))
+
+
+                if feature_info.linear_entropy <= feature_info.log_entropy:
+                    new_feature = feature + "_LogLinear"
+                    new_feature_list.append(new_feature)
+                    new_X[new_feature] = feature_info.log_slope * X[feature].apply(lambda x : math.log(x + 1.0)) + feature_info.log_bias
+                    #new_features[new_feature] = feature_info.log_slope * X[feature] + feature_info.log_bias
+                    logger.info("Feature: {} {}".format(feature, "Log Linear Transform"))
+                else:
+                    new_feature = feature + "_Linear"
+                    new_feature_list.append(new_feature)
+                    new_X[feature] = feature_info.linear_slope * X[feature] + feature_info.linear_bias
+                    logger.info("Feature: {} {}".format(feature, "Linear Transform"))
+            X = new_X
+            feature_list = new_feature_list
+
 
 
         logger.info("Loaded dataset from {} and got X shape {}".format(tsv_file_path, X.shape))
@@ -284,7 +364,7 @@ def Test2(feature_list, mean, std):
     init_logger('./Log')
     logger.info("Start Loding dataset")
     output_column_names = ['QueryID','SubID', 'UrlHash16B','IsMainPath']
-    train = LibSVMInferenceDataset.from_tsv_file('./Data/Eval.tsv', output_column_names, feature_list, mean, std)
+    train = LibSVMInferenceDataset.from_tsv_file('./Data/EvalDataWithRating.tsv', output_column_names, feature_list, mean, std)
     # train = LibSVMInferenceDataset.from_tsv_file('./Data/TrainSmall.tsv', output_column_names, feature_list, mean, std)
     output_column, x = train[0]
 
@@ -302,9 +382,65 @@ def Test2(feature_list, mean, std):
     for batch in train_loader:
         output_column, x = batch
 
+def Test3(feature_list):
+    init_logger('./Log')
+    logger.info("Start Loding dataset")
+
+    yaml.add_representer(FeatureInfo, FeatureInfo_repr)
+    yaml.add_constructor(u'!FeatureInfo', FeatureInfo_cons)
+    feature_info_path = './Data/TrainSmall_FeatureInfo.NumBucket_100.yaml'
+    with open(feature_info_path, "r") as fi:
+        feature_info_dict = yaml.load(fi.read(), Loader=yaml.FullLoader)
+
+    train, mean, std, feature_info_dict =  LibSVMDataset.from_tsv_file('./Data/TrainSmall.tsv', 'QueryID', 'Rating', feature_list, True, 'aether', feature_info_dict)
+    X,y = train[0]
+
+    logger.info("Dataset[0] X shape {}, y shape {}".format(X.shape, y.shape))
+
+    collate_fn = train.collate_fn()
+    train_loader = torch.utils.data.DataLoader(train, batch_size=10, shuffle=True, collate_fn=collate_fn)
+
+    seed = 50
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    for batch in train_loader:
+        x, y, idx = batch
+        print(x)
+        print(y)
+        print(idx)
+        break
+
+    return feature_info_dict
+
+def Test4(feature_list, feature_info_dict):
+    init_logger('./Log')
+    logger.info("Start Loding dataset")
+    output_column_names = ['QueryID','SubID', 'UrlHash16B','IsMainPath']
+    train = LibSVMInferenceDataset.from_tsv_file('./Data/EvalDataWithRating.tsv', output_column_names, feature_list, 'aether', 'None', 'None', feature_info_dict)
+    # train = LibSVMInferenceDataset.from_tsv_file('./Data/TrainSmall.tsv', output_column_names, feature_list, mean, std)
+    output_column, x = train[0]
+
+    # logger.info("Dataset[0] X shape {}".format(x.shape))
+
+    collate_fn = train.collate_fn()
+    train_loader = torch.utils.data.DataLoader(train, batch_size=10, shuffle=True, collate_fn=collate_fn)
+
+    seed = 50
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    for batch in train_loader:
+        output_column, x = batch
 
 if __name__ == '__main__':
     feature_list = 'QDVectorSimilarity,TermShardTotalQueryLength,TermShardMatchedTermCount_AUTB,TermShardMatchedTermCount_Click,TermShardMatchedPostingCount_AUTB,TermShardMatchedPostingCount_Click,TermShardMaxTermCountOfPosting_AUTB,TermShardMaxTermCountOfPosting_Click,TermShardQueryTermCoverage_AUTB,TermShardQueryTermCoverage_Click,TermShardMaxIDFOfPosting_AUTB,TermShardMaxIDFOfPosting_Click,TermShardAvgIDFOfPosting_AUTB,TermShardAvgIDFOfPosting_Click,TermShardMinPostingRatio_AUTB,TermShardMinPostingRatio_Click,BinaryTF_Url_0,BinaryTF_Url_1,BinaryTF_Url_2,BinaryTF_Url_3,BinaryTF_Url_4,BinaryTF_Url_5,BinaryTF_Url_6,BinaryTF_Url_7,BinaryTF_Url_8,BinaryTF_Url_9,BinaryTF_Title_0,BinaryTF_Title_1,BinaryTF_Title_2,BinaryTF_Title_3,BinaryTF_Title_4,BinaryTF_Title_5,BinaryTF_Title_6,BinaryTF_Title_7,BinaryTF_Title_8,BinaryTF_Title_9,BinaryTF_Body_0,BinaryTF_Body_1,BinaryTF_Body_2,BinaryTF_Body_3,BinaryTF_Body_4,BinaryTF_Body_5,BinaryTF_Body_6,BinaryTF_Body_7,BinaryTF_Body_8,BinaryTF_Body_9,AnchorFlatStreamLength,AnchorTotalPhraseCount,BodyTermCount,DomainRank,StaticRank,StreamLength_Anchor,StreamLength_Body,StreamLength_Title,StreamLength_Url,TbDomainUsers,WordsInDomain,WordsInPath,WordsInTitle,LanguagePreference,LocationPreference,d,TermShardTotalQueryTermCoverage,TermShardTotalQueryTermCoverageWeighted,TermShardMatchedTermCountWeighted_AUTB,TermShardMatchedTermCountWeighted_Click'.split(',')
-    mean, std = Test1(feature_list)
-    Test2(feature_list, mean, std)
+    # mean, std = Test1(feature_list)
+    # Test2(feature_list, mean, std)
+    feature_info_dict = Test3(feature_list)
+    Test4(feature_list, feature_info_dict)
 
