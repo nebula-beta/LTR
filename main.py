@@ -11,7 +11,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from Utils import init_logger, get_logger, send_to_bark
 from Dataset import LibSVMDataset, LibSVMInferenceDataset
-from Model import NeuralNet, FM_model, FM_model2
+from Model import NeuralNet, SENet, FM_model, FM_model2
 from Loss import approxNDCGLoss, lambdaLoss, listMLE, ordinal, rankNet
 from Metrics import Metrics
 from DatasetAnalysis import FeatureInfo, FeatureInfo_repr, FeatureInfo_cons
@@ -57,7 +57,11 @@ def training(args):
 
     list(map(int, args.hidden_nodes.split(',')))
     # Setup model, optimizer and loss
-    model = NeuralNet(train_data.num_features, args.layer, list(map(int, args.hidden_nodes.split(',')))).to(device)
+    model = None
+    if args.model_type == 'MLP':
+        model = NeuralNet(train_data.num_features, args.layer, list(map(int, args.hidden_nodes.split(',')))).to(device)
+    elif args.model_type == 'SENET':
+        model = SENet(train_data.num_features, args.layer, list(map(int, args.hidden_nodes.split(',')))).to(device)
     #model = FM_model2(train_data.num_features, 5)
     # model = FM_model(train_data.num_features, 5)
 
@@ -88,18 +92,20 @@ def training(args):
             x = x.to(device)
             y = y.to(device)
 
-
             pred = model(x)
             #weight = (1 - y / 100)
             #pred = pred * weight[:, :, None]
 
             pred = pred.reshape(pred.shape[0], pred.shape[1])
-            # loss = approxNDCGLoss(pred, y, alpha=args.alpha)
-            # loss = rankNet(pred, y, weight_by_diff=True)
 
-            loss = lambdaLoss(pred, y, weighing_scheme='ndcgLoss1_scheme', sigma=1.0, reduction_log='natural', reduction='sum')
-            # loss = lambdaLoss(pred, y, weighing_scheme='ndcgLoss2_scheme', sigma=1.0)
-            # loss = lambdaLoss(pred, y, weighing_scheme='ndcgLoss2PP_scheme', sigma=1.0)
+            if args.loss_type == 'NDCG':
+                loss = lambdaLoss(pred, y, weighing_scheme='ndcgLoss1_scheme', sigma=1.0, reduction_log='natural', reduction='sum')
+                # loss = lambdaLoss(pred, y, weighing_scheme='ndcgLoss2_scheme', sigma=1.0)
+                # loss = lambdaLoss(pred, y, weighing_scheme='ndcgLoss2PP_scheme', sigma=1.0)
+            elif args.loss_type == 'approxNDCG':
+                loss = approxNDCGLoss(pred, y, alpha=args.alpha)
+            elif args.loss_type == 'RankNet':
+                loss = rankNet(pred, y, weight_by_diff=True)
             # loss = listMLE(pred, y)
             #loss = ordinal(pred, y, 5)
 
@@ -109,7 +115,7 @@ def training(args):
 
 
         #scheduler.step()
-        if epoch != 0 and epoch % 1 == 0:
+        if epoch % args.eval_step == 0:
             logger.info("Eval")
             model.eval()
             output_column_list = []
@@ -119,9 +125,10 @@ def training(args):
                     output_column, x = batch
                     x = x.to(device)
 
-                    x = x.reshape(-1, x.shape[-1])
-                    predict_data = model(x).cpu().detach().numpy().tolist()
-
+                    x = torch.unsqueeze(x, dim=0)
+                    predict_data = model(x).squeeze(dim=0).cpu().detach().numpy().tolist()
+                    # x = x.reshape(-1, x.shape[-1])
+                    # predict_data = model(x).cpu().detach().numpy().tolist()
 
                     output_column_list.extend(output_column)
                     predict_list.extend(predict_data)
@@ -130,12 +137,14 @@ def training(args):
             recallset = pd.DataFrame(output_column_list, columns=output_column_names)
             recallset['L1Rank'] = pd.DataFrame(predict_list, columns=['L1Rank'])
             fidelity = Metrics.calc_fidelity(idealset, recallset)
+            ndcg = Metrics.calc_ndcg(idealset, recallset)
 
 
 
             # logger.info("Epoch: {}, Ndcg: {}, Fidelity: {}, Fidelity2 : {}".format(epoch, ndcg, fidelity, fidelity2))
-            logger.info("Epoch: {},  Fidelity: {}".format(epoch, fidelity))
+            logger.info("Epoch: {}, Fidelity: {}, NDCG: {}".format(epoch, fidelity, ndcg))
             writer.add_scalar('Fidelity', fidelity, epoch)
+            writer.add_scalar('NDCG', ndcg, epoch)
 
 
         #save the model
@@ -157,11 +166,14 @@ if __name__ == '__main__':
     parser.add_argument('--feature_info_path', dest = "feature_info_path", type = str, default='', required = False, help = "input test data tsv file")
     parser.add_argument('--log_dir', dest = "log_dir", type = str, default = './Log', help = "log dir")
     parser.add_argument('--model_dir', dest = "model_dir", type = str, default = './Model', help = "log dir")
-    parser.add_argument('--exp_name', dest = "exp_name", type = str, required = True, help = "experiment name")
+    parser.add_argument('--exp_name', dest = "exp_name", type = str, required = False, help = "experiment name")
     parser.add_argument('--device', dest = "device", type = str, default = 'cpu', help = "device")
     parser.add_argument('--epochs', dest = "epochs", type = int, default = 150, help = "max epochs allowed (default = 150)")
+    parser.add_argument('--eval_step', dest = "eval_step", type = int, default = 1, help = "eval step")
     parser.add_argument('--optimizer', dest = "optimizer", type = str, default = 'Adam', help = "optimizer=Adam/SGD")
     parser.add_argument('--lr', dest = "lr", type = float, default = 1e-3, help = "initial learning rate (default = 1e-3)")
+    parser.add_argument('--model_type', dest = "model_type", type = str, default = 'MLP', help = "model_type=MLP/SENET")
+    parser.add_argument('--loss_type', dest = "loss_type", type = str, default = 'NDCG', help = "loss_type=NDCG/approxNDCG/RankNet")
     parser.add_argument('--batch_size', dest = "batch_size", type = int, default = 32, help = "Training batch size. (default = 32)")
     parser.add_argument('--alpha', dest = "alpha", type = float, default = 1.0, help = "alpha")
     parser.add_argument('--layer', dest = "layer", type = int, default = 2, help = "Neural network layer. (default = 2)")
@@ -171,6 +183,9 @@ if __name__ == '__main__':
 
 
     args = parser.parse_args()
+
+    if args.exp_name == '' or args.exp_name == None:
+        args.exp_name = '_'.join(list(map(str, [args.train_data.split('/')[-1], args.optimizer, args.lr, args.loss_type, args.batch_size])))
 
 
     title = "Exp : {}".format(args.exp_name)

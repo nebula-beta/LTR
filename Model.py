@@ -40,6 +40,76 @@ class NeuralNet(nn.Module):
             x = module(x)
         return x
 
+class SENetLayer(nn.Module):
+    def __init__(self, filed_size, reduction_ratio=3):
+        super(SENetLayer, self).__init__()
+        self.filed_size = filed_size
+        self.reduction_ratio = reduction_ratio
+        self.reduction_size = max(1, self.filed_size // self.reduction_ratio)
+        self.excitation = nn.Sequential(
+            nn.Linear(self.filed_size, self.reduction_size, bias=False),
+            nn.ReLU(),
+            nn.Linear(self.reduction_size, self.filed_size, bias=False),
+            nn.ReLU()
+        )
+        self.print_cnt = 0
+    def forward(self, inputs):
+        if len(inputs.shape) != 3:
+            raise ValueError(
+            "Unexpected inputs dimensions %d, expect to be 3 dimensions" % (len(inputs.shape)))
+        # inouts -> [bs, filed_size, emb_dim]
+        shape = inputs.shape
+        inputs = inputs.reshape(shape[0] * shape[1], shape[2], 1)
+        Z = torch.mean(inputs, dim=-1, out=None) #[bs, filed_size, 1]
+        A = self.excitation(Z)
+        A = torch.relu(A)
+
+        if self.print_cnt % 100000 ==0:
+            print("SENET weight")
+            print(A.shape)
+            print(A)
+        self.print_cnt += 1
+        # print(inputs.shape)
+        # print(torch.unsqueeze(torch.unsqueeze(A, dim=0), dim=2).shape)
+        inputs = inputs.reshape(shape[0], shape[1], shape[2])
+        A = A.reshape(shape[0], shape[1], shape[2])
+        V = torch.mul(inputs, A)
+        # print(V.shape)
+        return V
+
+class SENet(nn.Module):
+    def __init__(self, n_feature, layers, hidden_nodes):
+        super(SENet, self).__init__()
+
+        assert(layers == len(hidden_nodes) + 1)
+
+        input_node = n_feature * 2
+
+        self.module_list = nn.ModuleList()
+        for  hidden_node in hidden_nodes:
+            self.module_list.append(nn.Linear(input_node, hidden_node))
+            self.module_list.append(nn.Tanh())
+            input_node = hidden_node
+
+        self.module_list.append(nn.Linear(input_node, 1))
+
+        self.senet = SENetLayer(n_feature, 1)
+
+        for m in self.module_list:
+            if isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, mean=0, std=0.01)
+
+        for name, param in self.senet.named_parameters():
+            nn.init.normal_(param, mean=0, std=0.01)
+
+
+    def forward(self, x):
+        x = torch.cat([x, self.senet(x)], dim=2)
+        for module in self.module_list:
+            x = module(x)
+        return x
+
+
 
 class FM_model2(nn.Module):
     def __init__(self, n, k):
@@ -110,18 +180,19 @@ class FM_model(nn.Module):
 
 if __name__ == '__main__':
     #net = NeuralNet(100, 3 , [32, 15])
-    net = NeuralNet(61, 4 , [64, 32, 15])
+    net = NeuralNet(61, 4, [64, 32, 15])
+    net = SENet(61, 4, [64, 32, 15])
     print(net)
 
     # [batch_size, n_feature]
-    x = torch.randn(32, 104, 61)
+    x = torch.randn(1, 2, 61)
     print(x.shape)
     x = net(x)
     print(x.shape)
 
 
-    x = torch.randn(32, 104, 61)
-    fm = FM_model2(61, 4)
-    x = fm(x)
-    print(x.shape)
+    # x = torch.randn(32, 104, 61)
+    # fm = FM_model2(61, 4)
+    # x = fm(x)
+    # print(x.shape)
 
