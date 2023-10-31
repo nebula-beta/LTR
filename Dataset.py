@@ -23,18 +23,19 @@ def _pad(sample, max_slate_length):
     :param max_slate_length: max state length in sample
     :return: ndarrays tuple contain features, labels and  original ranks of shape [max_slate_length, feature_dim], [max_slate_length], [max_slate_length]
     """
-    x, y = sample
+    x1, x2, y = sample
     slate_length = len(y)
 
-    fixed_len_x = np.pad(sample[0], ((0, max_slate_length  - slate_length), (0, 0)), "constant")
-    fixed_len_y = np.pad(sample[1], (0, max_slate_length - slate_length), "constant", constant_values=PADDED_Y_VALUE)
+    fixed_len_x1 = np.pad(sample[0], ((0, max_slate_length  - slate_length), (0, 0)), "constant")
+    fixed_len_x2 = np.pad(sample[1], ((0, max_slate_length  - slate_length), (0, 0)), "constant")
+    fixed_len_y = np.pad(sample[2], (0, max_slate_length - slate_length), "constant", constant_values=PADDED_Y_VALUE)
     indices = np.pad(np.arange(0, slate_length), (0, max_slate_length - slate_length), "constant", constant_values=PADDED_INDEX_VALUE)
-    return fixed_len_x, fixed_len_y, indices
+    return fixed_len_x1, fixed_len_x2, fixed_len_y, indices
 
 class LibSVMDataset(Dataset):
     """
     """
-    def __init__(self, X, y, query_ids, feature_list, filter_queries=True):
+    def __init__(self, dense_feature, sparse_feature, y, query_ids, dense_feature_list, sparse_feature_list, filter_queries=True):
         """
         :param X: [dataset_size, features_dim]
         :param y: [dataset_size]
@@ -42,42 +43,50 @@ class LibSVMDataset(Dataset):
         :param filter_queries: whether to filter queries that have no relevant documents associated with them.
         """
 
-        self.num_features = len(feature_list)
+        self.num_dense_features = len(dense_feature_list)
+        self.num_sparse_features= len(sparse_feature_list)
+        print("self.num_dense_features", self.num_dense_features)
+        print("self.num_sparse_features", self.num_sparse_features)
 
-        self.X = X
+        self.dense_feature = dense_feature
+        self.sparse_feature = sparse_feature
 
         unique_query_ids, indices, counts = np.unique(query_ids, return_index=True, return_counts=True)
         #indices not sorted
 
         groups = np.cumsum(counts[np.argsort(indices)])
 
-        self.X_by_qid = np.split(X, groups)[:-1] #[-1] is empty
+        self.dense_by_qid = np.split(dense_feature, groups)[:-1] #[-1] is empty
+        self.sparse_by_qid = np.split(sparse_feature, groups)[:-1] #[-1] is empty
         self.y_by_qid = np.split(y, groups)[:-1] #[-1] is empty
 
-        X_by_qid_filtered = []
+        dense_by_qid_filtered = []
+        sparse_by_qid_filtered = []
         y_by_qid_filtered = []
 
         filter_count = 0
         if filter_queries:
-            for x, y in zip(self.X_by_qid, self.y_by_qid):
+            for x1, x2,  y in zip(self.dense_by_qid, self.sparse_by_qid, self.y_by_qid):
                 if len(np.unique(y)) ==1:
                     filter_count += 1
                 else:
-                    X_by_qid_filtered.append(x)
+                    dense_by_qid_filtered.append(x1)
+                    sparse_by_qid_filtered.append(x2)
                     y_by_qid_filtered.append(y)
 
 
-            self.X_by_qid = X_by_qid_filtered
+            self.dense_by_qid = dense_by_qid_filtered
+            self.sparse_by_qid = sparse_by_qid_filtered
             self.y_by_qid = y_by_qid_filtered
 
-        self.longest_slate_length = max([len(a) for a in self.X_by_qid])
-        self.shortest_slate_length = min([len(a) for a in self.X_by_qid])
-        self.average_slate_length = sum([len(a) for a in self.X_by_qid]) / len(self.X_by_qid)
+        self.longest_slate_length = max([len(a) for a in self.dense_by_qid])
+        self.shortest_slate_length = min([len(a) for a in self.dense_by_qid])
+        self.average_slate_length = sum([len(a) for a in self.dense_by_qid]) / len(self.dense_by_qid)
 
 
-        logger.info("Loaded dataset with {} queries".format(len(self.X_by_qid) + filter_count))
+        logger.info("Loaded dataset with {} queries".format(len(self.dense_by_qid) + filter_count))
         logger.info("{} queries got filtered".format(filter_count))
-        logger.info("Loaded dataset with {} queries remaining".format(len(self.X_by_qid)))
+        logger.info("Loaded dataset with {} queries remaining".format(len(self.dense_by_qid)))
         logger.info("Shortest slate had {} documents".format(self.shortest_slate_length))
         logger.info("Longest slate had {} documents".format(self.longest_slate_length))
         logger.info("Average slate had {} documents".format(self.average_slate_length))
@@ -115,44 +124,38 @@ class LibSVMDataset(Dataset):
                 X[feature] = X[feature] / std[feature] - mean[feature] / std[feature]
 
         elif feature_process_type == 'aether':
+            dense_feature_list = []
+            sparse_feature_list = []
+            dense_feature = pd.DataFrame()
+            sparse_feature = pd.DataFrame()
+
             X = df[feature_list]
-            new_X = pd.DataFrame()
-            new_feature_list = []
             for feature in feature_list:
                 feature_info = feature_info_dict[feature]
 
                 if feature_info.unique_count == 2:
                     new_feature = feature + "_Bucket"
-                    new_feature_list.append(new_feature)
-                    new_X[new_feature] = X[feature].apply(lambda x : 0.0 if x > 0.0 else 1.0)
+                    sparse_feature_list.append(new_feature)
+                    sparse_feature[new_feature] = X[feature]
                     logger.info("Feature: {} {}".format(feature, "Bucket Transform"))
                     continue
 
-                if feature_info.zero_values / feature_info.total_values > 0.5:
-                    new_feature = feature + "_Bucket"
-                    new_feature_list.append(new_feature)
-                    new_X[new_feature] = X[feature].apply(lambda x : 0.0 if x > 0.0 else 1.0)
-                    logger.info("Feature: {} {}".format(feature, "Bucket Transform"))
-
-
                 if feature_info.linear_entropy <= feature_info.log_entropy:
                     new_feature = feature + "_LogLinear"
-                    new_feature_list.append(new_feature)
-                    new_X[new_feature] = feature_info.log_slope * X[feature].apply(lambda x : math.log(x + 1.0)) + feature_info.log_bias
+                    dense_feature_list.append(new_feature)
+                    dense_feature[new_feature] = feature_info.log_slope * X[feature].apply(lambda x : math.log(x + 1.0)) + feature_info.log_bias
                     #new_features[new_feature] = feature_info.log_slope * X[feature] + feature_info.log_bias
                     logger.info("Feature: {} {}".format(feature, "Log Linear Transform"))
                 else:
                     new_feature = feature + "_Linear"
-                    new_feature_list.append(new_feature)
-                    new_X[feature] = feature_info.linear_slope * X[feature] + feature_info.linear_bias
+                    dense_feature_list.append(new_feature)
+                    dense_feature[feature] = feature_info.linear_slope * X[feature] + feature_info.linear_bias
                     logger.info("Feature: {} {}".format(feature, "Linear Transform"))
-            X = new_X
-            feature_list = new_feature_list
 
-        logger.info("Loaded dataset from {} and got X shape {}, y shape {} and query_ids shape {}".format(tsv_file_path, X.shape, y.shape, query_ids.shape))
+        logger.info("Loaded dataset from {} and got dense shape {}, sparse shape {}, y shape {} and query_ids shape {}".format(tsv_file_path, dense_feature.shape, sparse_feature.shape,y.shape, query_ids.shape))
 
         # TODO and warning: X need sorted by query_id
-        return cls(X.to_numpy(), y.to_numpy(), query_ids.to_numpy(), feature_list, filter_queries), mean, std, feature_info_dict
+        return cls(dense_feature.to_numpy(), sparse_feature.to_numpy(), y.to_numpy(), query_ids.to_numpy(), dense_feature_list, sparse_feature_list, filter_queries), mean, std, feature_info_dict
 
 
     #@property
@@ -163,18 +166,19 @@ class LibSVMDataset(Dataset):
 
         #return [batch_dim, document_dim, features_dim]
     def __len__(self) -> int:
-        return len(self.X_by_qid)
+        return len(self.dense_by_qid)
 
     def __getitem__(self, idx):
         """
         :param idx: index of a group
         :return: ndarrays tuple contain features and labels of shapes [slate_length, features_dim] and [slate_length]
         """
-        x = self.X_by_qid[idx]
+        x1 = self.dense_by_qid[idx]
+        x2 = self.sparse_by_qid[idx]
         y = self.y_by_qid[idx]
         #print(x)
 
-        sample = x, y
+        sample = x1, x2, y
 
         return sample
 
@@ -184,32 +188,32 @@ class LibSVMDataset(Dataset):
         Returns a collate_fn that can be used to collate batches.
         """
         def _collate_fn(batch):
-            max_slate_length = max([len(y) for X,y in batch])
+            max_slate_length = max([len(y) for X1,X2,y in batch])
 
-            fixed_len_x_list = [] 
+            fixed_len_x1_list = [] 
+            fixed_len_x2_list = [] 
             fixed_len_y_list = []
             indices_list = []
             for batch_index, sample in enumerate(batch):
 
-                x, y = sample
+                x1, x2, y = sample
 
                 #print(x.shape)
-                fixed_len_x, fixed_len_y, indices = _pad(sample, max_slate_length)
+                fixed_len_x1, fixed_len_x2, fixed_len_y, indices = _pad(sample, max_slate_length)
 
 
-                fixed_len_x_list.append(fixed_len_x)
+                fixed_len_x1_list.append(fixed_len_x1)
+                fixed_len_x2_list.append(fixed_len_x2)
                 fixed_len_y_list.append(fixed_len_y)
                 indices_list.append(indices)
 
-                #print(fixed_len_x.shape)
-                #print(fixed_len_y.shape)
-                #print(indices.shape)
 
-            x = np.stack(fixed_len_x_list, axis=0)
+            x1 = np.stack(fixed_len_x1_list, axis=0)
+            x2 = np.stack(fixed_len_x2_list, axis=0)
             y = np.stack(fixed_len_y_list, axis=0)
             indices  = np.stack(indices_list, axis=0)
 
-            return torch.FloatTensor(x), torch.FloatTensor(y), torch.LongTensor(indices)
+            return torch.FloatTensor(x1), torch.LongTensor(x2), torch.FloatTensor(y), torch.LongTensor(indices)
         return _collate_fn
 
 
@@ -217,7 +221,7 @@ class LibSVMDataset(Dataset):
 class LibSVMInferenceDataset(Dataset):
     """
     """
-    def __init__(self, output_columns, X, feature_list):
+    def __init__(self, output_columns, dense_feature, sparse_feature, dense_feature_list, sparse_feature_list):
         """
         :param X: [dataset_size, features_dim]
         :param y: [dataset_size]
@@ -225,9 +229,11 @@ class LibSVMInferenceDataset(Dataset):
         :param filter_queries: whether to filter queries that have no relevant documents associated with them.
         """
 
-        self.num_features = len(feature_list)
+        self.dense_num_features = len(dense_feature_list)
+        self.sparse_num_features = len(sparse_feature_list)
         self.output_columns = output_columns.values.tolist()
-        self.X = X.tolist()
+        self.dense_feature = dense_feature.tolist()
+        self.sparse_feature = sparse_feature.tolist()
 
 
     @classmethod
@@ -255,58 +261,51 @@ class LibSVMInferenceDataset(Dataset):
                 X[feature] = X[feature] / std[feature] - mean[feature] / std[feature]
 
         elif feature_process_type == 'aether':
+            dense_feature_list = []
+            sparse_feature_list = []
+            dense_feature = pd.DataFrame()
+            sparse_feature = pd.DataFrame()
+
             X = df[feature_list]
-            new_X = pd.DataFrame()
-            new_feature_list = []
             for feature in feature_list:
                 feature_info = feature_info_dict[feature]
 
                 if feature_info.unique_count == 2:
                     new_feature = feature + "_Bucket"
-                    new_feature_list.append(new_feature)
-                    new_X[new_feature] = X[feature].apply(lambda x : 0.0 if x > 0.0 else 1.0)
+                    sparse_feature_list.append(new_feature)
+                    sparse_feature[new_feature] = X[feature]
                     logger.info("Feature: {} {}".format(feature, "Bucket Transform"))
                     continue
 
-                if feature_info.zero_values / feature_info.total_values > 0.5:
-                    new_feature = feature + "_Bucket"
-                    new_feature_list.append(new_feature)
-                    new_X[new_feature] = X[feature].apply(lambda x : 0.0 if x > 0.0 else 1.0)
-                    logger.info("Feature: {} {}".format(feature, "Bucket Transform"))
-
-
                 if feature_info.linear_entropy <= feature_info.log_entropy:
                     new_feature = feature + "_LogLinear"
-                    new_feature_list.append(new_feature)
-                    new_X[new_feature] = feature_info.log_slope * X[feature].apply(lambda x : math.log(x + 1.0)) + feature_info.log_bias
+                    dense_feature_list.append(new_feature)
+                    dense_feature[new_feature] = feature_info.log_slope * X[feature].apply(lambda x : math.log(x + 1.0)) + feature_info.log_bias
                     #new_features[new_feature] = feature_info.log_slope * X[feature] + feature_info.log_bias
                     logger.info("Feature: {} {}".format(feature, "Log Linear Transform"))
                 else:
                     new_feature = feature + "_Linear"
-                    new_feature_list.append(new_feature)
-                    new_X[feature] = feature_info.linear_slope * X[feature] + feature_info.linear_bias
+                    dense_feature_list.append(new_feature)
+                    dense_feature[feature] = feature_info.linear_slope * X[feature] + feature_info.linear_bias
                     logger.info("Feature: {} {}".format(feature, "Linear Transform"))
-            X = new_X
-            feature_list = new_feature_list
 
+        logger.info("Loaded dataset from {} and got dense shape {}, sparse shape {}".format(tsv_file_path, dense_feature.shape, sparse_feature.shape))
 
-
-        logger.info("Loaded dataset from {} and got X shape {}".format(tsv_file_path, X.shape))
-
-        return cls(output_columns, X.to_numpy(), feature_list)
+        return cls(output_columns, dense_feature.to_numpy(), sparse_feature.to_numpy(), dense_feature_list, sparse_feature_list)
 
     def __len__(self) -> int:
-        return len(self.X)
+        return len(self.dense_feature)
 
     def __getitem__(self, idx):
         """
         :param idx: index of a group
         :return: ndarrays tuple contain features and labels of shapes [slate_length, features_dim] and [slate_length]
         """
-        x = self.X[idx]
+        x1 = self.dense_feature[idx]
+        x2 = self.sparse_feature[idx]
         output_column = self.output_columns[idx]
 
-        return output_column, x
+        return output_column, x1, x2
 
     #@property
     #def shape(self) -> list:
@@ -323,14 +322,16 @@ class LibSVMInferenceDataset(Dataset):
         """
         def _collate_fn(batch):
             output_column_list = []
-            x_list = []
+            x1_list = []
+            x2_list = []
             for batch_index, sample in enumerate(batch):
 
-                output_column, x = sample
+                output_column, x1, x2 = sample
                 output_column_list.append(output_column)
-                x_list.append(x)
+                x1_list.append(x1)
+                x2_list.append(x2)
 
-            return output_column_list, torch.FloatTensor(x_list)
+            return output_column_list, torch.FloatTensor(x1_list), torch.LongTensor(x2_list)
         return _collate_fn
 
 
@@ -393,9 +394,9 @@ def Test3(feature_list):
         feature_info_dict = yaml.load(fi.read(), Loader=yaml.FullLoader)
 
     train, mean, std, feature_info_dict =  LibSVMDataset.from_tsv_file('./Data/TrainSmall.tsv', 'QueryID', 'Rating', feature_list, True, 'aether', feature_info_dict)
-    X,y = train[0]
+    X1, X2 ,y = train[0]
 
-    logger.info("Dataset[0] X shape {}, y shape {}".format(X.shape, y.shape))
+    logger.info("Dataset[0] X1 shape {}, X2 shape {}, y shape {}".format(X1.shape, X2.shape, y.shape))
 
     collate_fn = train.collate_fn()
     train_loader = torch.utils.data.DataLoader(train, batch_size=10, shuffle=True, collate_fn=collate_fn)
@@ -407,10 +408,10 @@ def Test3(feature_list):
     torch.cuda.manual_seed_all(seed)
 
     for batch in train_loader:
-        x, y, idx = batch
-        print(x)
-        print(y)
-        print(idx)
+        x1, x2, y, idx = batch
+        print(x1.shape)
+        print(x2.shape)
+        print(y.shape)
         break
 
     return feature_info_dict
@@ -421,7 +422,7 @@ def Test4(feature_list, feature_info_dict):
     output_column_names = ['QueryID','SubID', 'UrlHash16B','IsMainPath']
     train = LibSVMInferenceDataset.from_tsv_file('./Data/EvalDataWithRating.tsv', output_column_names, feature_list, 'aether', 'None', 'None', feature_info_dict)
     # train = LibSVMInferenceDataset.from_tsv_file('./Data/TrainSmall.tsv', output_column_names, feature_list, mean, std)
-    output_column, x = train[0]
+    output_column, x1, x2 = train[0]
 
     # logger.info("Dataset[0] X shape {}".format(x.shape))
 
@@ -435,7 +436,9 @@ def Test4(feature_list, feature_info_dict):
     torch.cuda.manual_seed_all(seed)
 
     for batch in train_loader:
-        output_column, x = batch
+        output_column, x1, x2 = batch
+        print(x1.shape)
+        print(x2.shape)
 
 if __name__ == '__main__':
     feature_list = 'QDVectorSimilarity,TermShardTotalQueryLength,TermShardMatchedTermCount_AUTB,TermShardMatchedTermCount_Click,TermShardMatchedPostingCount_AUTB,TermShardMatchedPostingCount_Click,TermShardMaxTermCountOfPosting_AUTB,TermShardMaxTermCountOfPosting_Click,TermShardQueryTermCoverage_AUTB,TermShardQueryTermCoverage_Click,TermShardMaxIDFOfPosting_AUTB,TermShardMaxIDFOfPosting_Click,TermShardAvgIDFOfPosting_AUTB,TermShardAvgIDFOfPosting_Click,TermShardMinPostingRatio_AUTB,TermShardMinPostingRatio_Click,BinaryTF_Url_0,BinaryTF_Url_1,BinaryTF_Url_2,BinaryTF_Url_3,BinaryTF_Url_4,BinaryTF_Url_5,BinaryTF_Url_6,BinaryTF_Url_7,BinaryTF_Url_8,BinaryTF_Url_9,BinaryTF_Title_0,BinaryTF_Title_1,BinaryTF_Title_2,BinaryTF_Title_3,BinaryTF_Title_4,BinaryTF_Title_5,BinaryTF_Title_6,BinaryTF_Title_7,BinaryTF_Title_8,BinaryTF_Title_9,BinaryTF_Body_0,BinaryTF_Body_1,BinaryTF_Body_2,BinaryTF_Body_3,BinaryTF_Body_4,BinaryTF_Body_5,BinaryTF_Body_6,BinaryTF_Body_7,BinaryTF_Body_8,BinaryTF_Body_9,AnchorFlatStreamLength,AnchorTotalPhraseCount,BodyTermCount,DomainRank,StaticRank,StreamLength_Anchor,StreamLength_Body,StreamLength_Title,StreamLength_Url,TbDomainUsers,WordsInDomain,WordsInPath,WordsInTitle,LanguagePreference,LocationPreference,d,TermShardTotalQueryTermCoverage,TermShardTotalQueryTermCoverageWeighted,TermShardMatchedTermCountWeighted_AUTB,TermShardMatchedTermCountWeighted_Click'.split(',')

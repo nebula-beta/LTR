@@ -11,8 +11,8 @@ from torch.utils.tensorboard import SummaryWriter
 
 from Utils import init_logger, get_logger, send_to_bark
 from Dataset import LibSVMDataset, LibSVMInferenceDataset
-from Model import NeuralNet, SENet, FM_model, FM_model2
-from Loss import approxNDCGLoss, lambdaLoss, listMLE, ordinal, rankNet
+from Model import NeuralNet, SENet, FM_model, FM_model2, NeuralNetEmbedding
+from Loss import approxNDCGLoss, lambdaLoss, listMLE, ordinal, rankNet, PointwiseLoss
 from Metrics import Metrics
 from DatasetAnalysis import FeatureInfo, FeatureInfo_repr, FeatureInfo_cons
 
@@ -49,7 +49,7 @@ def training(args):
         test_data = LibSVMInferenceDataset.from_tsv_file(args.test_data, output_column_names, feature_list, mean, std)
 
     train_loader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, shuffle=True, collate_fn=train_data.collate_fn())
-    test_loader = torch.utils.data.DataLoader(test_data, batch_size=100000, shuffle=False, collate_fn=test_data.collate_fn())
+    test_loader = torch.utils.data.DataLoader(test_data, batch_size=1000000, shuffle=False, collate_fn=test_data.collate_fn())
 
     # with open("mean_std.tsv", "w") as fo:
     #     for feature in feature_list:
@@ -62,6 +62,9 @@ def training(args):
         model = NeuralNet(train_data.num_features, args.layer, list(map(int, args.hidden_nodes.split(',')))).to(device)
     elif args.model_type == 'SENET':
         model = SENet(train_data.num_features, args.layer, list(map(int, args.hidden_nodes.split(',')))).to(device)
+    elif args.model_type == 'NeuralNetEmbedding':
+        model = NeuralNetEmbedding(train_data.num_dense_features, train_data.num_sparse_features, args.layer, list(map(int, args.hidden_nodes.split(',')))).to(device)
+
     #model = FM_model2(train_data.num_features, 5)
     # model = FM_model(train_data.num_features, 5)
 
@@ -88,11 +91,12 @@ def training(args):
         logger.info("Training")
         model.train()
         for batch in train_loader:
-            x, y, idx = batch
-            x = x.to(device)
+            x1, x2, y, idx = batch
+            x1 = x1.to(device)
+            x2 = x2.to(device)
             y = y.to(device)
 
-            pred = model(x)
+            pred = model(x1, x2)
             #weight = (1 - y / 100)
             #pred = pred * weight[:, :, None]
 
@@ -106,6 +110,8 @@ def training(args):
                 loss = approxNDCGLoss(pred, y, alpha=args.alpha)
             elif args.loss_type == 'RankNet':
                 loss = rankNet(pred, y, weight_by_diff=True)
+            elif args.loss_type == 'PointwiseLoss':
+                loss = PointwiseLoss(pred, y)
             # loss = listMLE(pred, y)
             #loss = ordinal(pred, y, 5)
 
@@ -122,11 +128,13 @@ def training(args):
             predict_list = []
             with torch.no_grad():
                 for batch in test_loader:
-                    output_column, x = batch
-                    x = x.to(device)
+                    output_column, x1, x2 = batch
+                    x1 = x1.to(device)
+                    x2 = x2.to(device)
 
-                    x = torch.unsqueeze(x, dim=0)
-                    predict_data = model(x).squeeze(dim=0).cpu().detach().numpy().tolist()
+                    x1 = torch.unsqueeze(x1, dim=0)
+                    x2 = torch.unsqueeze(x2, dim=0)
+                    predict_data = model(x1, x2).squeeze(dim=0).cpu().detach().numpy().tolist()
                     # x = x.reshape(-1, x.shape[-1])
                     # predict_data = model(x).cpu().detach().numpy().tolist()
 

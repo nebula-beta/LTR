@@ -5,6 +5,51 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+class NeuralNetEmbedding(nn.Module):
+    def __init__(self, n_dense_feature, n_sparse_feature, layers, hidden_nodes):
+        super(NeuralNetEmbedding, self).__init__()
+
+        assert(layers == len(hidden_nodes) + 1)
+
+
+        self.n_dense_feature = n_dense_feature
+        self.n_sparse_feature = n_sparse_feature
+        self.embedding_layer_list = nn.ModuleList()
+
+        for i in range(n_sparse_feature):
+            vocabulary_size = 10
+            embedding_dim = 5
+            embedding_layer = nn.Embedding(vocabulary_size, embedding_dim)
+            self.embedding_layer_list.append(embedding_layer)
+
+
+        input_node = n_dense_feature + n_sparse_feature * embedding_dim
+
+        self.module_list = nn.ModuleList()
+        for  hidden_node in hidden_nodes:
+            self.module_list.append(nn.Linear(input_node, hidden_node))
+            self.module_list.append(nn.Tanh())
+            input_node = hidden_node
+
+        self.module_list.append(nn.Linear(input_node, 1))
+
+
+        for m in self.module_list:
+            if isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, mean=0, std=0.01)
+
+    def forward(self, dense_feature, sparse_feature):
+        sparse_emb_list = []
+        for i in range(self.n_sparse_feature):
+            sparse_emb = self.embedding_layer_list[i](sparse_feature[:,:,i])
+            sparse_emb_list.append(sparse_emb)
+        sparse_feature_emb = torch.cat(sparse_emb_list, dim=2)
+
+        x = torch.cat([dense_feature, sparse_feature_emb], dim=2)
+        for module in self.module_list:
+            x = module(x)
+        return x
+
 class NeuralNet(nn.Module):
     def __init__(self, n_feature, layers, hidden_nodes):
         super(NeuralNet, self).__init__()
@@ -100,7 +145,8 @@ class SENet(nn.Module):
                 nn.init.normal_(m.weight, mean=0, std=0.01)
 
         for name, param in self.senet.named_parameters():
-            nn.init.normal_(param, mean=0, std=0.01)
+            nn.init.normal_(param, mean=0, std=0.1)
+            # nn.init.uniform_(param, a=0, b=0.01)
 
 
     def forward(self, x):
@@ -180,14 +226,15 @@ class FM_model(nn.Module):
 
 if __name__ == '__main__':
     #net = NeuralNet(100, 3 , [32, 15])
-    net = NeuralNet(61, 4, [64, 32, 15])
-    net = SENet(61, 4, [64, 32, 15])
+    net = NeuralNetEmbedding(34, 32, 4, [64, 32, 15])
     print(net)
 
     # [batch_size, n_feature]
-    x = torch.randn(1, 2, 61)
-    print(x.shape)
-    x = net(x)
+    dense_feature = torch.randn(1, 2, 34)
+    sparse_feature = torch.randint(0, 1, (1, 2, 32))
+    print(dense_feature.shape)
+    print(sparse_feature.shape)
+    x = net(dense_feature, sparse_feature)
     print(x.shape)
 
 

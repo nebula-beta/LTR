@@ -57,6 +57,13 @@ def approxNDCGLoss(y_pred, y_true, eps=DEFAULT_EPS, padded_value_indicator=PADDE
     return -torch.mean(approx_NDCG)
 
 
+celoss = torch.nn.CrossEntropyLoss()
+def PointwiseLoss(y_pred, y_true):
+    y_pred = y_pred.reshape(-1, 1)
+    y_true = y_true.reshape(-1, 1)
+    loss = celoss(y_pred, y_true)
+    return loss
+
 def lambdaLoss(y_pred, y_true, eps=DEFAULT_EPS, padded_value_indicator=PADDED_Y_VALUE, weighing_scheme=None, k=None, sigma=1., mu=10.,
                reduction="sum", reduction_log="binary"):
     """
