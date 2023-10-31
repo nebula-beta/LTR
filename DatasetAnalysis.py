@@ -128,12 +128,13 @@ def analysis(tsv_file_path, feature_list, output_file_path):
     """
 
     sep='\t'
+    print('load data')
     df = pd.read_csv(tsv_file_path, sep=sep)
     X = df[feature_list]
 
     feature_info_dict = dict()
     for feature in feature_list:
-        #print(feature)
+        print(feature)
         feature_info = FeatureInfo(feature)
 
         linear_feature = X[feature]
@@ -198,4 +199,5 @@ if __name__ == '__main__':
 
     print(len(all_feature_list))
 
-    analysis('./Data/TrainSmall80.tsv', all_feature_list, './Data/TrainSmall80_FeatureInfo.NumBucket_{}.yaml'.format(num_bucket))
+    # analysis('./Data/TrainSmall80.tsv', all_feature_list, './Data/TrainSmall80_FeatureInfo.NumBucket_{}.yaml'.format(num_bucket))
+    analysis('./Data/OFE.tsv', all_feature_list, './Data/OFE_FeatureInfo.NumBucket_{}.yaml'.format(num_bucket))

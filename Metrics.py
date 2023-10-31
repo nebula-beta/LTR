@@ -5,7 +5,7 @@ import time
 class Metrics(object):
 
     @staticmethod
-    def calc_ndcg(idealset, recallset, topn):
+    def calc_ndcg(idealset, recallset, topn=56):
         idealset = idealset[['QueryID', 'UrlHash16B', 'Rating']].drop_duplicates()
         recallset = recallset[recallset['IsMainPath']==1]
         recallset = recallset[recallset['RankPosition'] <= topn]
@@ -33,7 +33,7 @@ class Metrics(object):
         join['NDCG'] = join['DCG_y'] / join['DCG_x'] * 100
 
         ndcg = join['NDCG'].sum() / join['QueryID'].count()
-        print(ndcg)
+        return ndcg
 
     @staticmethod
     def calc_fidelity(idealset, recallset, main_path_quota=56, sub_path_quota=10):
@@ -55,7 +55,6 @@ class Metrics(object):
 
         idealset = idealset.groupby(['QueryID'], as_index=False)['Rating'].sum()
         recallset = recallset.groupby(['QueryID'], as_index=False)['Rating'].sum()
-
 
         #---
         join = pd.merge(idealset, recallset, on='QueryID', how='left')
@@ -92,10 +91,10 @@ class Metrics(object):
 
 if __name__ == '__main__':
     idealset = pd.read_csv('./Data/EvalIdealset.tsv', sep='\t')
-    # recallset = pd.read_csv('./Data/recallset.tsv', sep='\t', names=['QueryID','SubID','IsMainPath','UrlHash16B','L1Rank','RankPosition'])
+    recallset = pd.read_csv('./Data/recallset.tsv', sep='\t', names=['QueryID','SubID','IsMainPath','UrlHash16B','L1Rank','RankPosition'])
     # recallset = pd.read_csv('./Data/recallset2.tsv', sep='\t', names=['QueryID','SubID','IsMainPath','UrlHash16B','L1Rank','RankPosition'])
     # recallset = pd.read_csv('./Data/EvalData.tsv', sep='\t')
-    recallset = pd.read_csv('./Data/EvalDataWithRating.tsv', sep='\t')
+    # recallset = pd.read_csv('./Data/EvalDataWithRating.tsv', sep='\t')
 
 
 
