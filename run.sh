@@ -115,8 +115,8 @@ python main.py --train_data ./Data/TrainSmall.tsv \
                --log_dir ./Log\
                --epochs 20 \
                --optimizer Adam\
-               --lr 1e-4 \
-               --model_type NeuralNetEmbedding\
+               --lr 1e-5 \
+               --model_type NeuralNetEmbeddingSENet\
                --loss_type NDCG\
                --batch_size 1
 

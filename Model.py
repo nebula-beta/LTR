@@ -17,9 +17,10 @@ class NeuralNetEmbedding(nn.Module):
         self.embedding_layer_list = nn.ModuleList()
 
         for i in range(n_sparse_feature):
-            vocabulary_size = 10
-            embedding_dim = 5
+            vocabulary_size = 11
+            embedding_dim = 3
             embedding_layer = nn.Embedding(vocabulary_size, embedding_dim)
+            nn.init.xavier_uniform_(embedding_layer.weight.data)
             self.embedding_layer_list.append(embedding_layer)
 
 
@@ -150,6 +151,57 @@ class SENet(nn.Module):
 
 
     def forward(self, x):
+        x = torch.cat([x, self.senet(x)], dim=2)
+        for module in self.module_list:
+            x = module(x)
+        return x
+
+class NeuralNetEmbeddingSENet(nn.Module):
+    def __init__(self, n_dense_feature, n_sparse_feature, layers, hidden_nodes):
+        super(NeuralNetEmbeddingSENet, self).__init__()
+
+        assert(layers == len(hidden_nodes) + 1)
+
+
+        self.n_dense_feature = n_dense_feature
+        self.n_sparse_feature = n_sparse_feature
+        self.embedding_layer_list = nn.ModuleList()
+
+        for i in range(n_sparse_feature):
+            vocabulary_size = 11
+            embedding_dim = 3
+            embedding_layer = nn.Embedding(vocabulary_size, embedding_dim)
+            nn.init.xavier_uniform_(embedding_layer.weight.data)
+            self.embedding_layer_list.append(embedding_layer)
+
+
+        input_node = n_dense_feature + n_sparse_feature * embedding_dim
+
+        self.senet = SENetLayer(input_node, 1)
+        input_node *= 2
+
+        self.module_list = nn.ModuleList()
+        for  hidden_node in hidden_nodes:
+            self.module_list.append(nn.Linear(input_node, hidden_node))
+            self.module_list.append(nn.Tanh())
+            input_node = hidden_node
+
+        self.module_list.append(nn.Linear(input_node, 1))
+
+
+        for m in self.module_list:
+            if isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, mean=0, std=0.01)
+
+    def forward(self, dense_feature, sparse_feature):
+        sparse_emb_list = []
+        for i in range(self.n_sparse_feature):
+            sparse_emb = self.embedding_layer_list[i](sparse_feature[:,:,i])
+            sparse_emb_list.append(sparse_emb)
+        sparse_feature_emb = torch.cat(sparse_emb_list, dim=2)
+
+        x = torch.cat([dense_feature, sparse_feature_emb], dim=2)
+
         x = torch.cat([x, self.senet(x)], dim=2)
         for module in self.module_list:
             x = module(x)

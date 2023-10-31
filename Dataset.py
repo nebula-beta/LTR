@@ -139,6 +139,11 @@ class LibSVMDataset(Dataset):
                     sparse_feature[new_feature] = X[feature]
                     logger.info("Feature: {} {}".format(feature, "Bucket Transform"))
                     continue
+                if feature_info.feature_name == 'TermShardTotalQueryLength':
+                    new_feature = feature + "_Bucket"
+                    sparse_feature_list.append(new_feature)
+                    sparse_feature[new_feature] = X[feature].clip(1, 10)
+                    logger.info("Feature: {} {}".format(feature, "Bucket Transform"))
 
                 if feature_info.linear_entropy <= feature_info.log_entropy:
                     new_feature = feature + "_LogLinear"
@@ -276,6 +281,11 @@ class LibSVMInferenceDataset(Dataset):
                     sparse_feature[new_feature] = X[feature]
                     logger.info("Feature: {} {}".format(feature, "Bucket Transform"))
                     continue
+                if feature_info.feature_name == 'TermShardTotalQueryLength':
+                    new_feature = feature + "_Bucket"
+                    sparse_feature_list.append(new_feature)
+                    sparse_feature[new_feature] = X[feature].clip(1, 10)
+                    logger.info("Feature: {} {}".format(feature, "Bucket Transform"))
 
                 if feature_info.linear_entropy <= feature_info.log_entropy:
                     new_feature = feature + "_LogLinear"

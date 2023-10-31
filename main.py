@@ -11,7 +11,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from Utils import init_logger, get_logger, send_to_bark
 from Dataset import LibSVMDataset, LibSVMInferenceDataset
-from Model import NeuralNet, SENet, FM_model, FM_model2, NeuralNetEmbedding
+from Model import NeuralNet, SENet, FM_model, FM_model2, NeuralNetEmbedding, NeuralNetEmbeddingSENet
 from Loss import approxNDCGLoss, lambdaLoss, listMLE, ordinal, rankNet, PointwiseLoss
 from Metrics import Metrics
 from DatasetAnalysis import FeatureInfo, FeatureInfo_repr, FeatureInfo_cons
@@ -64,6 +64,8 @@ def training(args):
         model = SENet(train_data.num_features, args.layer, list(map(int, args.hidden_nodes.split(',')))).to(device)
     elif args.model_type == 'NeuralNetEmbedding':
         model = NeuralNetEmbedding(train_data.num_dense_features, train_data.num_sparse_features, args.layer, list(map(int, args.hidden_nodes.split(',')))).to(device)
+    elif args.model_type == 'NeuralNetEmbeddingSENet':
+        model = NeuralNetEmbeddingSENet(train_data.num_dense_features, train_data.num_sparse_features, args.layer, list(map(int, args.hidden_nodes.split(',')))).to(device)
 
     #model = FM_model2(train_data.num_features, 5)
     # model = FM_model(train_data.num_features, 5)
